@@ -124,12 +124,21 @@ build_release() {
     fi
 
     # Create archive
-    local archive_name="${BIN_NAME}_${VERSION#v}_${os}_${arch}"
+    local archive_name="${BIN_NAME}_${os}_${arch}"
+    local versioned_name="${BIN_NAME}_${VERSION#v}_${os}_${arch}"
     if [[ "${os}" == "windows" ]]; then
-      (cd "${dist_dir}" && zip -q "${archive_name}.zip" "${BIN_NAME}-${os}-${arch}${ext}" && rm -f "${BIN_NAME}-${os}-${arch}${ext}")
+      (cd "${dist_dir}" && zip -q "${archive_name}.zip" "${BIN_NAME}-${os}-${arch}${ext}")
+      if [[ "${archive_name}" != "${versioned_name}" ]]; then
+        cp "${dist_dir}/${archive_name}.zip" "${dist_dir}/${versioned_name}.zip"
+      fi
+      rm -f "${dist_dir}/${BIN_NAME}-${os}-${arch}${ext}"
       echo "  ↳ created ${dist_dir}/${archive_name}.zip ($(du -h "${dist_dir}/${archive_name}.zip" | cut -f1))"
     else
-      (cd "${dist_dir}" && tar -czf "${archive_name}.tar.gz" "${BIN_NAME}-${os}-${arch}" && rm -f "${BIN_NAME}-${os}-${arch}")
+      (cd "${dist_dir}" && tar -czf "${archive_name}.tar.gz" "${BIN_NAME}-${os}-${arch}")
+      if [[ "${archive_name}" != "${versioned_name}" ]]; then
+        cp "${dist_dir}/${archive_name}.tar.gz" "${dist_dir}/${versioned_name}.tar.gz"
+      fi
+      rm -f "${dist_dir}/${BIN_NAME}-${os}-${arch}"
       echo "  ↳ created ${dist_dir}/${archive_name}.tar.gz ($(du -h "${dist_dir}/${archive_name}.tar.gz" | cut -f1))"
     fi
   done

@@ -27,13 +27,21 @@ A lightning-fast, zero-dependency concurrent HTTP load testing tool written in G
 
 ## Installation
 
-### 1. Go Install (Recommended for Go users)
+### 1. One-Liner Install (Linux & macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jadmadi/surge/main/install | bash
+```
+
+*(Automatically detects OS/architecture, downloads the binary, and installs to `/usr/local/bin` or `~/.local/bin`. Custom directory supported via `BINDIR=/custom/bin`).*
+
+### 2. Go Install (for Go developers)
 
 ```bash
 go install github.com/jadmadi/surge@latest
 ```
 
-### 2. Precompiled Binaries (Linux, macOS, Windows)
+### 3. Precompiled Binaries (Manual Download)
 
 Download the latest release for your architecture from the [GitHub Releases](https://github.com/jadmadi/surge/releases) page:
 
@@ -49,7 +57,7 @@ chmod +x surge
 sudo mv surge /usr/local/bin/
 ```
 
-### 3. Build from Source
+### 4. Build from Source
 
 ```bash
 git clone https://github.com/jadmadi/surge.git
