@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/http"
+	urlpkg "net/url"
 	"os"
 	"os/signal"
 	"sort"
@@ -139,6 +141,12 @@ var presets = map[string]preset{
 	},
 }
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	var (
 		url         string
@@ -152,6 +160,7 @@ func main() {
 		rps         int
 		insecure    bool
 		noColor     bool
+		showVersion bool
 		ramp        time.Duration
 		think       time.Duration
 		outputFmt   string
@@ -171,6 +180,7 @@ func main() {
 	flag.IntVar(&rps, "rps", 0, "max requests per second (0 = no limit)")
 	flag.BoolVar(&insecure, "insecure", false, "skip TLS certificate verification")
 	flag.BoolVar(&noColor, "no-color", false, "disable colored output")
+	flag.BoolVar(&showVersion, "v", false, "print version and exit")
 	flag.DurationVar(&ramp, "ramp", 0, "gradually launch concurrency over this duration")
 	flag.DurationVar(&think, "think", 0, "random sleep (0 to this) between requests per worker")
 	flag.StringVar(&outputFmt, "o", "text", "output format: text or json")
@@ -183,6 +193,7 @@ func main() {
 	flag.IntVar(&total, "total", 0, "total requests (alias for -n)")
 	flag.DurationVar(&duration, "duration", 10*time.Second, "test duration (alias for -d)")
 	flag.StringVar(&method, "method", "GET", "HTTP method (alias for -m)")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit (alias for -v)")
 	flag.DurationVar(&ramp, "ramp-up", 0, "gradually launch concurrency (alias for -ramp)")
 	flag.DurationVar(&think, "think-time", 0, "random sleep between requests (alias for -think)")
 	flag.StringVar(&outputFmt, "output", "text", "output format (alias for -o)")
@@ -214,7 +225,7 @@ func main() {
 		w := os.Stderr
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "  %s\n", cyan("╭──────────────────────────────────────────────────────────╮"))
-		fmt.Fprintf(w, "  %s\n", cyan("│")+bold("  load-test                                               ")+cyan("│"))
+		fmt.Fprintf(w, "  %s\n", cyan("│")+bold("  surge                                                   ")+cyan("│"))
 		fmt.Fprintf(w, "  %s\n", cyan("│")+dim("  Concurrent HTTP load tester with latency percentiles    ")+cyan("│"))
 		fmt.Fprintf(w, "  %s\n", cyan("╰──────────────────────────────────────────────────────────╯"))
 		fmt.Fprintln(w)
@@ -222,8 +233,8 @@ func main() {
 		// USAGE
 		fmt.Fprintf(w, "  %s\n", bold("USAGE"))
 		fmt.Fprintf(w, "  %s\n", dim(strings.Repeat("─", 56)))
-		fmt.Fprintf(w, "  %s %s\n", gray("→"), "load-test "+bold("<profile>")+" "+bold("<URL>")+" "+dim("[flags]"))
-		fmt.Fprintf(w, "  %s %s\n", gray("→"), "load-test "+bold("<URL>")+" "+dim("--profile")+" "+bold("<name>")+" "+dim("[flags]"))
+		fmt.Fprintf(w, "  %s %s\n", gray("→"), "surge "+bold("<profile>")+" "+bold("<URL>")+" "+dim("[flags]"))
+		fmt.Fprintf(w, "  %s %s\n", gray("→"), "surge "+bold("<URL>")+" "+dim("--profile")+" "+bold("<name>")+" "+dim("[flags]"))
 		fmt.Fprintln(w)
 
 		// PRESETS
@@ -245,7 +256,7 @@ func main() {
 				gray(p.desc))
 		}
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "  %s %s\n", dim("ℹ"), dim("Override any preset flag: load-test realistic https://example.com -c 100"))
+		fmt.Fprintf(w, "  %s %s\n", dim("ℹ"), dim("Override any preset flag: surge realistic https://example.com -c 100"))
 		fmt.Fprintln(w)
 
 		// EXAMPLES
@@ -254,12 +265,12 @@ func main() {
 		examples := []struct {
 			comment, cmd string
 		}{
-			{"Is the site fast for one user?", "load-test baseline https://example.com"},
-			{"What do 50 real users experience?", "load-test realistic https://example.com"},
-			{"Find the breaking point", "load-test capacity https://example.com"},
-			{"Survive a traffic burst", "load-test spike https://example.com"},
-			{"API endpoint with auth", `load-test https://api.example.com -c 100 -d 30s -H "Authorization: Bearer ..."`},
-			{"Machine-readable output for CI", "load-test realistic https://example.com -o json | jq .summary"},
+			{"Is the site fast for one user?", "surge baseline https://example.com"},
+			{"What do 50 real users experience?", "surge realistic https://example.com"},
+			{"Find the breaking point", "surge capacity https://example.com"},
+			{"Survive a traffic burst", "surge spike https://example.com"},
+			{"API endpoint with auth", `surge https://api.example.com -c 100 -d 30s -H "Authorization: Bearer ..."`},
+			{"Machine-readable output for CI", "surge realistic https://example.com -o json | jq .summary"},
 		}
 		for _, e := range examples {
 			fmt.Fprintf(w, "  %s %s\n", gray("#"), dim(e.comment))
@@ -287,6 +298,7 @@ func main() {
 			{"-body", "", "str", "", "Request body"},
 			{"-ct", "", "str", "application/json", "Content-Type header when -body is set"},
 			{"-url", "--target", "str", "", "Target URL (or pass as positional arg)"},
+			{"-v", "--version", "", "", "Print version and exit"},
 			{"", "--insecure", "", "", "Skip TLS certificate verification"},
 			{"", "--no-color", "", "", "Disable colored output"},
 		}
@@ -334,7 +346,7 @@ func main() {
 	filtered := make([]string, 0, len(os.Args))
 	// Known bool flags that don't consume a following value.
 	boolFlags := map[string]bool{
-		"insecure": true, "no-color": true,
+		"insecure": true, "no-color": true, "v": true, "version": true,
 	}
 	for i := 1; i < len(os.Args); i++ {
 		arg := os.Args[i]
@@ -366,6 +378,11 @@ func main() {
 	}
 	os.Args = append(os.Args[:1], filtered...)
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("surge %s (commit: %s, built: %s)\n", version, commit, date)
+		return
+	}
 
 	// Resolve profile: positional profile takes priority, then --profile flag.
 	if profile == "" && positionalProfile != "" {
@@ -410,6 +427,20 @@ func main() {
 		os.Exit(2)
 	}
 
+	parsedURL, err := urlpkg.Parse(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: invalid URL %q: %v\n", url, err)
+		os.Exit(2)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		fmt.Fprintf(os.Stderr, "error: URL scheme must be http or https (e.g. https://example.com)\n")
+		os.Exit(2)
+	}
+	if parsedURL.Host == "" {
+		fmt.Fprintf(os.Stderr, "error: URL host is missing (e.g. https://example.com)\n")
+		os.Exit(2)
+	}
+
 	useColor = !noColor && isTTY(os.Stdout) && outputFmt == "text"
 
 	// Parse custom headers once.
@@ -421,6 +452,21 @@ func main() {
 			os.Exit(2)
 		}
 		parsedHeaders = append(parsedHeaders, [2]string{k, v})
+	}
+
+	baseReq, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: invalid request parameters: %v\n", err)
+		os.Exit(2)
+	}
+	var bodyBytes []byte
+	if body != "" {
+		bodyBytes = []byte(body)
+		baseReq.Header.Set("Content-Type", contentType)
+		baseReq.ContentLength = int64(len(bodyBytes))
+	}
+	for _, h := range parsedHeaders {
+		baseReq.Header.Add(h[0], h[1])
 	}
 
 	client := &http.Client{
@@ -474,14 +520,14 @@ func main() {
 			go func() {
 				select {
 				case <-timer.C:
-					worker(ctx, client, method, url, body, contentType, parsedHeaders, limiter, think, &results, &resultsMu, &wg, &sent)
+					worker(ctx, client, baseReq, bodyBytes, limiter, think, &results, &resultsMu, &wg, &sent)
 				case <-ctx.Done():
 					timer.Stop()
 					wg.Done()
 				}
 			}()
 		} else {
-			go worker(ctx, client, method, url, body, contentType, parsedHeaders, limiter, think, &results, &resultsMu, &wg, &sent)
+			go worker(ctx, client, baseReq, bodyBytes, limiter, think, &results, &resultsMu, &wg, &sent)
 		}
 	}
 
@@ -510,8 +556,8 @@ func main() {
 func worker(
 	ctx context.Context,
 	client *http.Client,
-	method, url, body, contentType string,
-	headers [][2]string,
+	baseReq *http.Request,
+	bodyBytes []byte,
 	limiter <-chan time.Time,
 	think time.Duration,
 	results *[]result,
@@ -532,22 +578,9 @@ func worker(
 			return
 		}
 
-		var bodyReader io.Reader
-		if body != "" {
-			bodyReader = stringReader(body)
-		}
-		req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
-		if err != nil {
-			resultsMu.Lock()
-			*results = append(*results, result{err: err})
-			resultsMu.Unlock()
-			return
-		}
-		if body != "" {
-			req.Header.Set("Content-Type", contentType)
-		}
-		for _, h := range headers {
-			req.Header.Set(h[0], h[1])
+		req := baseReq.Clone(ctx)
+		if len(bodyBytes) > 0 {
+			req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		}
 
 		reqStart := time.Now()
@@ -588,9 +621,9 @@ func printBanner(method, url string, concurrency, total int, duration time.Durat
 	line := strings.Repeat("─", width)
 	fmt.Println()
 	fmt.Printf("%s %s %s\n", col(c.cyan, "┌"+line+"┐"), "", "")
-	title := "LOAD TEST"
+	title := "SURGE"
 	if profile != "" {
-		title = fmt.Sprintf("LOAD TEST · %s", col(c.bold, strings.ToUpper(profile)))
+		title = fmt.Sprintf("SURGE · %s", col(c.bold, strings.ToUpper(profile)))
 	}
 	fmt.Printf("%s %-"+fmt.Sprint(width-2)+"s %s\n",
 		col(c.cyan, "│"), col(c.bold, title), col(c.cyan, "│"))
@@ -1280,20 +1313,5 @@ func withLimit(parent context.Context, n int64) context.Context {
 	return &limitCtx{Context: parent, remaining: rem}
 }
 
-type strReader struct {
-	s string
-	i int
-}
-
-func (r *strReader) Read(p []byte) (int, error) {
-	if r.i >= len(r.s) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.s[r.i:])
-	r.i += n
-	return n, nil
-}
-
-func stringReader(s string) io.Reader { return &strReader{s: s} }
 
 func init() { log.SetFlags(0) }
