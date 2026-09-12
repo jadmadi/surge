@@ -1,1 +1,24 @@
-load-test
+# Binaries
+surge
+surge.exe
+*.exe
+
+# Release artifacts
+dist/
+*.tar.gz
+*.zip
+SHA256SUMS
+
+# Test and coverage artifacts
+*.out
+*.test
+coverage.html
+profile.pprof
+
+# IDE & Editor artifacts
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store

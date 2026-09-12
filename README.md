@@ -1,250 +1,220 @@
-# load-test
+# surge
 
-A concurrent HTTP load testing tool written in Go. Simulates virtual users hitting a URL and reports latency percentiles, throughput, status code distribution, error breakdown, and actionable recommendations.
+[![CI](https://github.com/jadmadi/surge/actions/workflows/ci.yml/badge.svg)](https://github.com/jadmadi/surge/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/jadmadi/surge?color=brightgreen)](https://github.com/jadmadi/surge/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/jadmadi/surge)](go.mod)
 
-Single binary. No dependencies. No runtime. No Docker. Just download and run.
+A lightning-fast, zero-dependency concurrent HTTP load testing tool written in Go. Simulates virtual users hitting a target URL or API, reporting latency percentiles, throughput, status code distributions, error breakdowns, and automated health verdicts.
 
-## Features
+**Single binary. Zero runtime dependencies. No Docker required. Just download and run.**
 
-- **Concurrent virtual users** — spin up hundreds of workers hammering a target URL
-- **Latency percentiles** — min, p25, p50, p75, p90, p95, p99, max, plus a visual histogram
-- **Test presets** — `baseline`, `realistic`, `capacity`, `spike` for common load testing scenarios
-- **Ramp-up** — gradually launch concurrency instead of a thundering herd
-- **Think time** — random sleep between requests to simulate real user browsing behavior
-- **Custom headers** — repeatable `-H` flag with `@file` support for long JWTs
-- **Rate limiting** — cap requests per second across all workers
-- **Error classification** — categorizes errors (timeout, connection refused, DNS, TLS, etc.) with sample messages
-- **Status code analysis** — interprets 4xx/5xx codes and suggests fixes
-- **Analysis & recommendations** — automatic verdict (Excellent/Good/Fair/Poor) with actionable insights
-- **JSON output** — machine-readable format for CI/CD pipelines and dashboards
-- **Colored terminal output** — visual report with ANSI colors (auto-disabled when piped)
-- **Single binary** — UPX-compressed, ~2 MB, zero runtime dependencies
+---
 
-## Install
+## Why `surge`?
 
-### Download the binary
+| Feature | `surge` | `hey` | `wrk` | `ab` |
+| :--- | :---: | :---: | :---: | :---: |
+| **Zero Dependencies** | :white_check_mark: Single static binary (~2 MB) | :white_check_mark: | :x: C / OpenSSL / Lua | :x: Apache utils |
+| **Built-in Presets** | :white_check_mark: `baseline`, `realistic`, `capacity`, `spike` | :x: | :x: | :x: |
+| **Ramp-Up Curves** | :white_check_mark: `--ramp-up 10s` | :x: | :x: (Lua only) | :x: |
+| **Think-Time Simulation** | :white_check_mark: `--think-time 3s` | :x: | :x: (Lua only) | :x: |
+| **Automated Diagnostic Verdict** | :white_check_mark: Excellent/Good/Fair/Poor + tips | :x: | :x: | :x: |
+| **Latency Histogram & Percentiles** | :white_check_mark: min, p25, p50, p75, p90, p95, p99, max | :white_check_mark: Partial | :white_check_mark: Partial | :x: |
+| **JSON Output for CI/CD** | :white_check_mark: `-o json` | :white_check_mark: | :x: (JSON scripts needed) | :x: |
+
+---
+
+## Installation
+
+### 1. Go Install (Recommended for Go users)
+
+```bash
+go install github.com/jadmadi/surge@latest
+```
+
+### 2. Precompiled Binaries (Linux, macOS, Windows)
+
+Download the latest release for your architecture from the [GitHub Releases](https://github.com/jadmadi/surge/releases) page:
 
 ```bash
 # Linux (amd64)
-curl -L -o load-test https://github.com/jadMadi/load-test/releases/latest/download/load-test-linux-amd64
-chmod +x load-test
+curl -sSL -o surge https://github.com/jadmadi/surge/releases/latest/download/surge_linux_amd64.tar.gz | tar -xz
+chmod +x surge
+sudo mv surge /usr/local/bin/
+
+# macOS (Apple Silicon / arm64)
+curl -sSL -o surge https://github.com/jadmadi/surge/releases/latest/download/surge_darwin_arm64.tar.gz | tar -xz
+chmod +x surge
+sudo mv surge /usr/local/bin/
 ```
 
-### Build from source
+### 3. Build from Source
 
 ```bash
-git clone https://github.com/jadMadi/load-test.git
-cd load-test
-go build -o load-test .
+git clone https://github.com/jadmadi/surge.git
+cd surge
 
-# Or use the UPX-compressed build script
+# Build local binary
 ./build.sh
 ```
 
-**Requirements:** Go 1.21+ (only for building). The compiled binary has no runtime dependencies.
+*(Optional: install `upx` if you want UPX binary compression to ~2 MB).*
 
-## Quick start
+---
 
-```bash
-# Is the site fast for one user?
-./load-test baseline https://example.com
-
-# What do 50 real users experience?
-./load-test realistic https://example.com
-
-# Find the breaking point
-./load-test capacity https://example.com
-
-# Survive a traffic burst
-./load-test spike https://example.com
-```
-
-## Test presets
-
-Presets bundle sensible flag combinations for common load testing scenarios. Override any preset flag by passing it explicitly.
-
-| Preset | Concurrency | Total | Duration | Ramp-up | Think time | Use case |
-|---|---|---|---|---|---|---|
-| `baseline` | 1 | 100 | — | — | — | Pure latency floor, no concurrency noise |
-| `realistic` | 50 | — | 1m | 10s | 0–3s random | Simulates real browsing behavior |
-| `capacity` | 200 | — | 30s | 20s | — | Find where the site starts degrading |
-| `spike` | 500 | — | 10s | — | — | Burst survival, not comfort |
+## Quick Start
 
 ```bash
-# Use a preset but override concurrency
-./load-test realistic https://example.com -c 100
+# Pure baseline latency floor (1 user, 100 requests)
+surge baseline https://example.com
 
-# Use a preset but extend the duration
-./load-test spike https://example.com -d 30s
+# Simulate 50 realistic users browsing with ramp-up and think time
+surge realistic https://example.com
+
+# Find the breaking point (200 users ramped over 20s)
+surge capacity https://example.com
+
+# Burst survival check (500 users hitting simultaneously for 10s)
+surge spike https://example.com
 ```
 
-## Usage
+---
+
+## Presets
+
+Presets bundle proven parameter combinations for standard performance engineering workflows. You can override any individual preset flag by passing it explicitly.
+
+| Preset | Concurrency | Total | Duration | Ramp-up | Think time | Purpose |
+| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| `baseline` | 1 | 100 | — | — | — | Measure pure latency floor without concurrency noise |
+| `realistic` | 50 | — | 60s | 10s | 0–3s random | Real user browsing behavior with pauses and ramp-up |
+| `capacity` | 200 | — | 30s | 20s | — | Gradually push system to locate performance degradation |
+| `spike` | 500 | — | 10s | instant | — | Burst survival check under abrupt load |
+
+```bash
+# Override preset flags:
+surge realistic https://example.com -c 100 -d 2m
+```
+
+---
+
+## Common Recipes
+
+### API Endpoint with Authentication
+
+```bash
+surge https://api.example.com/v1/orders \
+  -c 50 -d 30s \
+  -H "Authorization: Bearer <token>" \
+  -H "X-Client-ID: my-app"
+```
+
+### Reading Headers from a File (e.g. Long JWTs)
+
+```bash
+surge https://api.example.com/v1/profile -H @/path/to/auth-header.txt
+```
+
+### POST Requests with JSON Body
+
+```bash
+surge https://api.example.com/items \
+  -m POST \
+  -body '{"sku":"ITEM-123","quantity":2}' \
+  -ct application/json \
+  -c 25 -n 500
+```
+
+### Rate Limiting (Cap Throughput)
+
+```bash
+# Cap aggregate traffic across all workers at 250 requests/sec
+surge https://example.com -c 50 -rps 250 -d 1m
+```
+
+### CI/CD Quality Gates with JSON Output
+
+```bash
+# Assert p99 latency < 250ms and error rate == 0 in CI pipelines
+surge baseline https://staging.example.com -o json | jq -e '
+  .latency.p99_ms < 250 and .summary.errors == 0
+' > /dev/null || (echo "Performance regression detected!" && exit 1)
+```
+
+---
+
+## Flags & Options
 
 ```
-load-test <profile> <URL> [flags]
-load-test <URL> --profile <name> [flags]
+Usage:
+  surge <profile> <URL> [flags]
+  surge <URL> --profile <name> [flags]
 ```
 
-### Flags
-
-| Flag | Alias | Type | Default | Description |
-|---|---|---|---|---|
-| `-c` | `--concurrency` | int | 10 | Concurrent users |
-| `-n` | `--total` | int | 0 | Total requests (0 = run for duration) |
-| `-d` | `--duration` | dur | 10s | Test duration when -n is 0 |
-| `-H` | `--header` | str | | Custom header `Key: Value` (repeatable, `@file` supported) |
-| `-m` | `--method` | str | GET | HTTP method |
-| | `--ramp-up` | dur | 0 | Gradually launch concurrency over this duration |
-| | `--think-time` | dur | 0 | Random sleep (0 to this) between requests per worker |
-| `-o` | `--output` | str | text | Output format: `text` or `json` |
-| | `--profile` | str | | Test preset: `baseline`, `realistic`, `capacity`, `spike` |
-| `-rps` | | int | 0 | Max requests per second (0 = no limit) |
-| | `--timeout` | dur | 30s | Per-request timeout |
-| `-body` | | str | | Request body |
-| `-ct` | | str | application/json | Content-Type header when -body is set |
-| `-url` | `--target` | str | | Target URL (or pass as positional arg) |
+| Short | Long | Type | Default | Description |
+| :--- | :--- | :---: | :---: | :--- |
+| `-c` | `--concurrency` | `int` | `10` | Concurrent virtual users |
+| `-n` | `--total` | `int` | `0` | Total requests (`0` = run for duration) |
+| `-d` | `--duration` | `dur` | `10s` | Test duration when `-n` is `0` |
+| `-H` | `--header` | `str` | `""` | Custom header `'Key: Value'` (repeatable, `@file` supported) |
+| `-m` | `--method` | `str` | `"GET"` | HTTP method (GET, POST, PUT, DELETE, etc.) |
+| | `--ramp-up` | `dur` | `0` | Gradually launch concurrency over this duration |
+| | `--think-time` | `dur` | `0` | Random sleep (0 to this duration) between requests |
+| `-o` | `--output` | `str` | `"text"` | Output format: `text` or `json` |
+| | `--profile` | `str` | `""` | Test preset: `baseline`, `realistic`, `capacity`, `spike` |
+| `-rps` | | `int` | `0` | Max aggregate requests per second (`0` = unconstrained) |
+| | `--timeout` | `dur` | `30s` | Per-request timeout |
+| `-body` | | `str` | `""` | Request body string |
+| `-ct` | | `str` | `"application/json"` | Content-Type header when `-body` is set |
+| `-url` | `--target` | `str` | `""` | Target URL (can also be passed positionally) |
+| `-v` | `--version` | | | Print version, commit hash, build date, and exit |
 | | `--insecure` | | | Skip TLS certificate verification |
-| | `--no-color` | | | Disable colored output |
+| | `--no-color` | | | Disable ANSI colored terminal output |
 
-### Examples
+---
 
-#### Basic load test
+## Interpreting Reports
 
-```bash
-./load-test https://example.com -c 50 -d 15s
-```
+### Verdict Thresholds
 
-#### API endpoint with authentication
+| Verdict | Error Rate | p99 Latency | Meaning |
+| :--- | :---: | :---: | :--- |
+| **Excellent** | `< 0.1%` | `< 200 ms` | Fast, healthy, fully stable under tested load |
+| **Good** | `< 1.0%` | `< 500 ms` | Stable with minor latency variance |
+| **Fair** | `< 5.0%` | `< 1000 ms` | Noticeable degradation; investigate server bottlenecks |
+| **Poor** | `> 5.0%` | `> 1000 ms` | Severe degradation or service failures |
 
-```bash
-./load-test https://api.example.com/users -c 100 -d 30s \
-  -H "Authorization: Bearer eyJhbGci..." \
-  -H "X-API-Key: secret-key"
-```
+### Key Metrics to Monitor
+- **p50 (Median)**: The typical experience for 50% of your requests.
+- **p99 (Tail Latency)**: What the slowest 1% of users experience. Critical for detecting cold starts, GC stalls, and database locks.
+- **p99/p50 Ratio**: A ratio greater than `10x` usually signals cache misses or downstream queuing issues.
+- **Error Categories**: Classifies failures (DNS, TLS, connection refused, resets, timeouts) with sampled error messages.
 
-#### Load header from a file (useful for long JWTs)
+---
 
-```bash
-echo "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..." > /tmp/auth.txt
-./load-test https://api.example.com -c 50 -d 30s -H @/tmp/auth.txt
-```
+## Contributing
 
-#### Realistic user simulation with ramp-up and think time
-
-```bash
-./load-test https://example.com -c 200 --ramp-up 10s --think-time 2s -d 1m
-```
-
-#### Rate-limited test (cap at 200 req/s)
+We welcome contributions! Please review our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before submitting pull requests.
 
 ```bash
-./load-test https://example.com -c 100 -rps 200 -d 30s
+# Run tests with race detection
+go test -v -race ./...
+
+# Build release packages
+./build.sh --release
 ```
 
-#### POST with a JSON body
+---
 
-```bash
-./load-test https://api.example.com/users -m POST \
-  -body '{"name":"test","email":"test@example.com"}' \
-  -c 20 -n 100
-```
+## Legal & Ethical Disclaimer
 
-#### JSON output for CI/CD pipelines
+`surge` is created for testing **your own** applications and infrastructure, or targets for which you have explicit written authorization. 
 
-```bash
-./load-test realistic https://example.com -o json | jq .summary
-```
+Unauthorized load testing may violate the Computer Fraud and Abuse Act (CFAA), the Computer Misuse Act, and international anti-trespass laws. You alone are responsible for your testing targets.
 
-```bash
-# Fail CI if p99 exceeds 500ms
-./load-test https://example.com -c 50 -n 1000 -o json | \
-  jq -e '.latency.p99_ms < 500' > /dev/null || exit 1
-```
-
-## Output
-
-### Text output (default)
-
-The text report includes:
-
-1. **Banner** — test parameters (target, concurrency, duration, ramp-up, think time)
-2. **Summary** — elapsed, requests sent, completed, successful, errors, throughput
-3. **Latency** — percentile table with visual bars (min, p25, p50, p75, p90, p95, p99, max, avg)
-4. **Distribution** — histogram of latency buckets (<50ms, 50-100ms, 100-250ms, etc.)
-5. **Status codes** — HTTP response code counts with percentages
-6. **Errors** — categorized error breakdown with sample messages
-7. **Analysis** — overall verdict, latency interpretation, error analysis, and recommendations
-
-### JSON output (`-o json`)
-
-```json
-{
-  "summary": {
-    "elapsed": "15.001s",
-    "sent": 29530,
-    "completed": 29530,
-    "successful": 29480,
-    "errors": 50,
-    "error_rate_pct": 0.17,
-    "throughput_req_s": 1968.5,
-    "concurrency": 50
-  },
-  "latency": {
-    "min_ms": 12,
-    "p50_ms": 22,
-    "p90_ms": 31,
-    "p99_ms": 87,
-    "max_ms": 294,
-    "avg_ms": 24.64
-  },
-  "distribution": [...],
-  "status_codes": { "200": 29480 },
-  "errors": {
-    "total": 50,
-    "rate_pct": 0.17,
-    "categories": { "Timeout": 50 },
-    "samples": { "Timeout": "Get \"https://...\": context deadline exceeded" }
-  }
-}
-```
-
-## How to interpret results
-
-### Verdict
-
-| Verdict | Error rate | p99 | Meaning |
-|---|---|---|---|
-| Excellent | < 0.1% | < 200ms | Site is fast and stable under this load |
-| Good | < 1% | < 500ms | Minor issues, room for optimization |
-| Fair | < 5% | < 1000ms | Noticeable degradation, investigate before scaling |
-| Poor | > 5% | > 1000ms | Site is failing under this load |
-
-### Key metrics to watch
-
-- **p50 (median)** — what most users experience
-- **p99 (tail)** — what 1% of users experience; SREs watch this closely
-- **p99/p50 ratio** — tail variance; a ratio > 10 indicates cold starts, cache misses, or GC pauses
-- **Error rate** — anything above 1% is worth investigating
-- **Throughput** — requests per second; compare across runs to track capacity changes
-
-## Legal
-
-This tool is for testing **your own** websites and APIs only. Do **not** use it against sites you do not own or have explicit permission to test.
-
-Unauthorized load testing may violate computer fraud, abuse, and trespass laws in your jurisdiction, including but not limited to:
-- **United States**: Computer Fraud and Abuse Act (CFAA)
-- **United Kingdom**: Computer Misuse Act 1990
-- **European Union**: Directive 2013/40/EU on attacks against information systems
-
-Illegal use will be reported to the relevant authorities. You alone are responsible for ensuring you have authorization to test the target.
-
-## Developer
-
-**Jad Madi**
-
-- Email: [jadmadi@duck.com](mailto:jadmadi@duck.com)
-- X (Twitter): [@jadmadi](https://x.com/jadmadi)
+---
 
 ## License
 
-[MIT](LICENSE) — Jad Madi
+[MIT](LICENSE) © 2025 Jad Madi
