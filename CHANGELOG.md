@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Helper functions and unit tests for number, percentage, middle truncation, and status code formatting.
 
 ### Changed
+- Switched project license to GNU Affero General Public License v3 (AGPL-3.0).
 - Refined terminal reporting layout and styling.
 
 ## [0.1.0] - 2026-09-12

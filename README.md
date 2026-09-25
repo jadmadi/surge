@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jadmadi/surge/actions/workflows/ci.yml/badge.svg)](https://github.com/jadmadi/surge/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/jadmadi/surge?color=brightgreen)](https://github.com/jadmadi/surge/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/jadmadi/surge)](go.mod)
 
 A lightning-fast, zero-dependency concurrent HTTP load testing tool written in Go. Simulates virtual users hitting a target URL or API, reporting latency percentiles, throughput, status code distributions, error breakdowns, and automated health verdicts.
@@ -235,4 +235,4 @@ Unauthorized load testing may violate the Computer Fraud and Abuse Act (CFAA), t
 
 ## License
 
-[MIT](LICENSE) © 2025 Jad Madi
+[AGPL-3.0](LICENSE) © 2025 Jad Madi
