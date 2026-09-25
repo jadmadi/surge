@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -173,11 +174,12 @@ func TestWorkerExecution(t *testing.T) {
 		resultsMu sync.Mutex
 		wg        sync.WaitGroup
 		sent      atomic.Int64
+		errsLive  atomic.Int64
 	)
 
 	wg.Add(2)
-	go worker(ctx, client, baseReq, []byte("ping"), nil, 0, &results, &resultsMu, &wg, &sent)
-	go worker(ctx, client, baseReq, []byte("ping"), nil, 0, &results, &resultsMu, &wg, &sent)
+	go worker(ctx, client, baseReq, []byte("ping"), nil, 0, &results, &resultsMu, &wg, &sent, &errsLive)
+	go worker(ctx, client, baseReq, []byte("ping"), nil, 0, &results, &resultsMu, &wg, &sent, &errsLive)
 
 	wg.Wait()
 
@@ -191,5 +193,134 @@ func TestWorkerExecution(t *testing.T) {
 		if r.status != 200 {
 			t.Errorf("unexpected status: %d", r.status)
 		}
+	}
+}
+
+func TestFmtNum(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want string
+	}{
+		{144, "144"},
+		{144.5, "144.5"},
+		{123.456, "123.46"},
+		{0, "0"},
+		{100, "100"},
+		{8.33, "8.33"},
+	}
+	for _, tc := range cases {
+		if got := fmtNum(tc.in); got != tc.want {
+			t.Errorf("fmtNum(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestFmtInt(t *testing.T) {
+	cases := map[int64]string{
+		0:        "0",
+		12:       "12",
+		999:      "999",
+		1234:     "1,234",
+		1234567:  "1,234,567",
+		12345678: "12,345,678",
+	}
+	for in, want := range cases {
+		if got := fmtInt(in); got != want {
+			t.Errorf("fmtInt(%d) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestFmtPct(t *testing.T) {
+	if got := fmtPct(100, 100); got != "100%" {
+		t.Errorf("fmtPct(100, 100) = %q, want 100%%", got)
+	}
+	if got := fmtPct(1, 12); got != "8.33%" {
+		t.Errorf("fmtPct(1, 12) = %q, want 8.33%%", got)
+	}
+	if got := fmtPct(0, 12); got != "0%" {
+		t.Errorf("fmtPct(0, 12) = %q, want 0%%", got)
+	}
+	if got := fmtPct(5, 0); got != "0%" {
+		t.Errorf("fmtPct(5, 0) = %q, want 0%%", got)
+	}
+}
+
+func TestPlural(t *testing.T) {
+	cases := map[int]string{
+		0:  "0 users",
+		1:  "1 user",
+		2:  "2 users",
+		50: "50 users",
+	}
+	for n, want := range cases {
+		if got := plural(n, "user"); got != want {
+			t.Errorf("plural(%d, \"user\") = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestTruncateMiddle(t *testing.T) {
+	s := "dial tcp: lookup nonexistent-domain-abc123xyz.com: no such host"
+	got := truncateMiddle(s, 30)
+	if len([]rune(got)) != 30 {
+		t.Errorf("truncateMiddle length = %d, want 30 (%q)", len([]rune(got)), got)
+	}
+	if !strings.HasSuffix(got, "no such host") {
+		t.Errorf("truncateMiddle lost the useful tail: %q", got)
+	}
+	if !strings.HasPrefix(got, "dial") {
+		t.Errorf("truncateMiddle lost the head: %q", got)
+	}
+	if got := truncateMiddle("short", 30); got != "short" {
+		t.Errorf("truncateMiddle(short) = %q, want unchanged", got)
+	}
+}
+
+func TestComputeVerdict(t *testing.T) {
+	cases := []struct {
+		errRate float64
+		p99     float64
+		want    string
+	}{
+		{0, 50, "Excellent"},
+		{0.5, 300, "Good"},
+		{2, 100, "Fair"},
+		{10, 100, "Poor"},
+		{0, 1500, "Poor"},
+		{0, 0, "Excellent"},
+	}
+	for _, tc := range cases {
+		s := stats{errRate: tc.errRate, p99: tc.p99}
+		if got := computeVerdict(s).word; got != tc.want {
+			t.Errorf("computeVerdict(errRate=%v, p99=%v) = %q, want %q", tc.errRate, tc.p99, got, tc.want)
+		}
+	}
+}
+
+func TestStatusCodeSymbol(t *testing.T) {
+	cases := map[int]string{
+		200: "✓",
+		301: "→",
+		404: "⚠",
+		500: "✗",
+		503: "✗",
+	}
+	for code, want := range cases {
+		if got := statusCodeSymbol(code); got != want {
+			t.Errorf("statusCodeSymbol(%d) = %q, want %q", code, got, want)
+		}
+	}
+}
+
+func TestProgressBar(t *testing.T) {
+	if got := progressBar(500, 1000, 20); got != "██████████░░░░░░░░░░" {
+		t.Errorf("progressBar(500, 1000, 20) = %q", got)
+	}
+	if got := progressBar(0, 1000, 4); got != "░░░░" {
+		t.Errorf("progressBar(0, 1000, 4) = %q", got)
+	}
+	if got := progressBar(1000, 1000, 4); got != "████" {
+		t.Errorf("progressBar(1000, 1000, 4) = %q", got)
 	}
 }

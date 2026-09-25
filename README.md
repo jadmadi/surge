@@ -85,6 +85,9 @@ surge capacity https://example.com
 
 # Burst survival check (500 users hitting simultaneously for 10s)
 surge spike https://example.com
+
+# Bare domains work too — surge assumes https
+surge realistic example.com
 ```
 
 ---
@@ -148,6 +151,12 @@ surge https://example.com -c 50 -rps 250 -d 1m
 surge baseline https://staging.example.com -o json | jq -e '
   .latency.p99_ms < 250 and .summary.errors == 0
 ' > /dev/null || (echo "Performance regression detected!" && exit 1)
+
+# Or rely on exit codes: surge exits 1 when the error rate exceeds
+# --fail-threshold (default 50 — only catastrophic failure fails the build;
+# set 0 to fail on any error)
+surge capacity https://staging.example.com --fail-threshold 1 -o json > /dev/null \
+  || echo "Load test FAILED"
 ```
 
 ---
@@ -170,6 +179,7 @@ Usage:
 | | `--ramp-up` | `dur` | `0` | Gradually launch concurrency over this duration |
 | | `--think-time` | `dur` | `0` | Random sleep (0 to this duration) between requests |
 | `-o` | `--output` | `str` | `"text"` | Output format: `text` or `json` |
+| | `--fail-threshold` | `pct` | `50` | Exit code `1` when error rate exceeds this percent (`0` = fail on any error) |
 | | `--profile` | `str` | `""` | Test preset: `baseline`, `realistic`, `capacity`, `spike` |
 | `-rps` | | `int` | `0` | Max aggregate requests per second (`0` = unconstrained) |
 | | `--timeout` | `dur` | `30s` | Per-request timeout |

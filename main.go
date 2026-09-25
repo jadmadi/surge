@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,6 +70,16 @@ var c = struct {
 	cyan: "\033[36m", gray: "\033[90m",
 }
 var useColor bool
+
+// animate gates purely cosmetic animation (section stagger, bar grow-in,
+// badge stamp). It follows useColor: on only for colored text output on a TTY.
+var animate bool
+
+// boxWidth is the shared width for banner/help boxes and section separators.
+const boxWidth = 52
+
+// spinnerFrames cycles in the live progress line.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func col(color, s string) string {
 	if !useColor {
@@ -166,6 +177,7 @@ func main() {
 		outputFmt   string
 		profile     string
 		headers     headerList
+		failPct     float64
 	)
 
 	// Short flags (power users).
@@ -184,6 +196,7 @@ func main() {
 	flag.DurationVar(&ramp, "ramp", 0, "gradually launch concurrency over this duration")
 	flag.DurationVar(&think, "think", 0, "random sleep (0 to this) between requests per worker")
 	flag.StringVar(&outputFmt, "o", "text", "output format: text or json")
+	flag.Float64Var(&failPct, "fail-threshold", 50, "exit code 1 when error rate exceeds this percent (0 = any error)")
 	flag.Var(&headers, "H", "custom header 'Key: Value' (repeatable, @file supported)")
 	flag.StringVar(&profile, "profile", "", "test preset: baseline, realistic, capacity, spike")
 
@@ -224,22 +237,22 @@ func main() {
 
 		w := os.Stderr
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "  %s\n", cyan("╭──────────────────────────────────────────────────────────╮"))
-		fmt.Fprintf(w, "  %s\n", cyan("│")+bold("  surge                                                   ")+cyan("│"))
-		fmt.Fprintf(w, "  %s\n", cyan("│")+dim("  Concurrent HTTP load tester with latency percentiles    ")+cyan("│"))
-		fmt.Fprintf(w, "  %s\n", cyan("╰──────────────────────────────────────────────────────────╯"))
+		fmt.Fprintf(w, "  %s\n", cyan("╭──────────────────────────────────────────────────╮"))
+		fmt.Fprintf(w, "  %s\n", cyan("│")+bold("  surge                                           ")+cyan("│"))
+		fmt.Fprintf(w, "  %s\n", cyan("│")+dim("  Concurrent HTTP load tester                     ")+cyan("│"))
+		fmt.Fprintf(w, "  %s\n", cyan("╰──────────────────────────────────────────────────╯"))
 		fmt.Fprintln(w)
 
 		// USAGE
 		fmt.Fprintf(w, "  %s\n", bold("USAGE"))
-		fmt.Fprintf(w, "  %s\n", dim(strings.Repeat("─", 56)))
+		fmt.Fprintf(w, "  %s\n", dim(strings.Repeat("─", boxWidth)))
 		fmt.Fprintf(w, "  %s %s\n", gray("→"), "surge "+bold("<profile>")+" "+bold("<URL>")+" "+dim("[flags]"))
 		fmt.Fprintf(w, "  %s %s\n", gray("→"), "surge "+bold("<URL>")+" "+dim("--profile")+" "+bold("<name>")+" "+dim("[flags]"))
 		fmt.Fprintln(w)
 
 		// PRESETS
 		fmt.Fprintf(w, "  %s\n", bold("PRESETS"))
-		fmt.Fprintf(w, "  %s\n", dim(strings.Repeat("─", 56)))
+		fmt.Fprintf(w, "  %s\n", dim(strings.Repeat("─", boxWidth)))
 		presetRows := []struct {
 			name, params, desc string
 		}{
@@ -261,7 +274,7 @@ func main() {
 
 		// EXAMPLES
 		fmt.Fprintf(w, "  %s\n", bold("EXAMPLES"))
-		fmt.Fprintf(w, "  %s\n", dim(strings.Repeat("─", 56)))
+		fmt.Fprintf(w, "  %s\n", dim(strings.Repeat("─", boxWidth)))
 		examples := []struct {
 			comment, cmd string
 		}{
@@ -280,20 +293,21 @@ func main() {
 
 		// FLAGS
 		fmt.Fprintf(w, "  %s\n", bold("FLAGS"))
-		fmt.Fprintf(w, "  %s\n", dim(strings.Repeat("─", 56)))
+		fmt.Fprintf(w, "  %s\n", dim(strings.Repeat("─", boxWidth)))
 		flagRows := []struct {
 			short, long, typ, def, desc string
 		}{
 			{"-c", "--concurrency", "int", "10", "Concurrent users"},
-			{"-n", "--total", "int", "0", "Total requests (0 = run for duration)"},
+			{"-n", "--total", "int", "", "Total requests (0 = run for duration)"},
 			{"-d", "--duration", "dur", "10s", "Test duration when -n is 0"},
 			{"-H", "--header", "str", "", "Custom header 'Key: Value' (repeatable, @file)"},
 			{"-m", "--method", "str", "GET", "HTTP method"},
-			{"", "--ramp-up", "dur", "0", "Gradually launch concurrency over this duration"},
-			{"", "--think-time", "dur", "0", "Random sleep (0 to this) between requests per worker"},
+			{"", "--ramp-up", "dur", "", "Gradually launch concurrency over this duration"},
+			{"", "--think-time", "dur", "", "Random sleep (0 to this) between requests per worker"},
 			{"-o", "--output", "str", "text", "Output format: text or json"},
+			{"", "--fail-threshold", "pct", "50", "Exit code 1 when error rate exceeds this (0 = any error)"},
 			{"", "--profile", "str", "", "Test preset: baseline, realistic, capacity, spike"},
-			{"-rps", "", "int", "0", "Max requests per second (0 = no limit)"},
+			{"-rps", "", "int", "", "Max requests per second (0 = no limit)"},
 			{"", "--timeout", "dur", "30s", "Per-request timeout"},
 			{"-body", "", "str", "", "Request body"},
 			{"-ct", "", "str", "application/json", "Content-Type header when -body is set"},
@@ -324,7 +338,7 @@ func main() {
 
 		// LEGAL
 		fmt.Fprintf(w, "  %s\n", bold("LEGAL"))
-		fmt.Fprintf(w, "  %s\n", dim(strings.Repeat("─", 56)))
+		fmt.Fprintf(w, "  %s\n", dim(strings.Repeat("─", boxWidth)))
 		fmt.Fprintf(w, "  %s\n", yellow("⚠  This tool is for testing YOUR OWN websites and APIs only."))
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "  %s\n", dim("  Do NOT use it against sites you do not own or have explicit"))
@@ -427,6 +441,16 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Auto-fix bare domains up front: example.com → https://example.com.
+	useColor = !noColor && isTTY(os.Stdout) && outputFmt == "text"
+	animate = useColor
+	if !strings.Contains(url, "://") {
+		fixed := "https://" + url
+		fmt.Fprintf(os.Stderr, "%s %s %s %s\n",
+			col(c.gray, "ℹ"), col(c.dim, url), col(c.gray, "→"), col(c.cyan, fixed))
+		url = fixed
+	}
+
 	parsedURL, err := urlpkg.Parse(url)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: invalid URL %q: %v\n", url, err)
@@ -441,7 +465,10 @@ func main() {
 		os.Exit(2)
 	}
 
-	useColor = !noColor && isTTY(os.Stdout) && outputFmt == "text"
+	if failPct < 0 || failPct > 100 {
+		fmt.Fprintf(os.Stderr, "error: --fail-threshold must be between 0 and 100\n")
+		os.Exit(2)
+	}
 
 	// Parse custom headers once.
 	parsedHeaders := make([][2]string, 0, len(headers.headers))
@@ -479,14 +506,15 @@ func main() {
 		},
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	ctx := sigCtx
 	if total > 0 {
-		ctx = withLimit(ctx, int64(total))
+		ctx = withLimit(sigCtx, int64(total))
 	} else {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, duration)
+		ctx, cancel = context.WithTimeout(sigCtx, duration)
 		defer cancel()
 	}
 
@@ -499,7 +527,7 @@ func main() {
 	}
 
 	if outputFmt == "text" {
-		fmt.Fprintln(os.Stderr, col(c.gray, "⚠  Only test sites you own or have permission to test. Unauthorized use may be illegal."))
+		fmt.Fprintln(os.Stderr, col(c.gray, "⚠  Only test sites you own or have permission to test. Illegal use will be reported."))
 		printBanner(method, url, concurrency, total, duration, rps, ramp, think, profile)
 	}
 
@@ -508,9 +536,35 @@ func main() {
 		resultsMu sync.Mutex
 		wg        sync.WaitGroup
 		sent      atomic.Int64
+		errsLive  atomic.Int64
 	)
 
 	start := time.Now()
+
+	// Live progress line on stderr, only when attached to a terminal.
+	// Piped runs stay silent so stdout/stderr stay machine-parseable.
+	showProgress := outputFmt == "text" && isTTY(os.Stderr)
+	stopProgress := make(chan struct{})
+	progressDone := make(chan struct{})
+	progressWidth := 0
+	if showProgress {
+		go func() {
+			defer close(progressDone)
+			ticker := time.NewTicker(250 * time.Millisecond)
+			defer ticker.Stop()
+			frame := 0
+			for {
+				select {
+				case <-ticker.C:
+					progressWidth = drawProgress(frame, start, total, sent.Load(), errsLive.Load(), progressWidth)
+					frame++
+				case <-stopProgress:
+					return
+				}
+			}
+		}()
+	}
+
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		// Ramp-up: stagger goroutine starts evenly across the ramp duration.
@@ -520,19 +574,36 @@ func main() {
 			go func() {
 				select {
 				case <-timer.C:
-					worker(ctx, client, baseReq, bodyBytes, limiter, think, &results, &resultsMu, &wg, &sent)
+					worker(ctx, client, baseReq, bodyBytes, limiter, think, &results, &resultsMu, &wg, &sent, &errsLive)
 				case <-ctx.Done():
 					timer.Stop()
 					wg.Done()
 				}
 			}()
 		} else {
-			go worker(ctx, client, baseReq, bodyBytes, limiter, think, &results, &resultsMu, &wg, &sent)
+			go worker(ctx, client, baseReq, bodyBytes, limiter, think, &results, &resultsMu, &wg, &sent, &errsLive)
 		}
 	}
 
 	wg.Wait()
+
+	// Take down the progress line before printing the report.
+	if showProgress {
+		close(stopProgress)
+		<-progressDone
+		if progressWidth > 0 {
+			fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", progressWidth))
+		}
+	}
 	elapsed := time.Since(start)
+
+	if sigCtx.Err() != nil {
+		detail := fmt.Sprintf("%d completed", len(results))
+		if total > 0 {
+			detail = fmt.Sprintf("%d/%d", len(results), total)
+		}
+		fmt.Fprintf(os.Stderr, "%s Interrupted — showing partial results (%s).\n", col(c.yellow, "⏹"), detail)
+	}
 
 	if len(results) == 0 {
 		if outputFmt == "text" {
@@ -540,7 +611,7 @@ func main() {
 		} else {
 			fmt.Println(`{"error":"no requests completed"}`)
 		}
-		return
+		os.Exit(1)
 	}
 
 	stats := computeStats(results, elapsed, sent.Load(), concurrency)
@@ -550,6 +621,15 @@ func main() {
 		printJSON(stats)
 	default:
 		report(stats)
+	}
+
+	// CI gate: non-zero exit when the error rate breaches the threshold.
+	// Default 50 keeps the default lenient; use --fail-threshold 0 to fail
+	// on any error.
+	if stats.errRate > failPct {
+		fmt.Fprintf(os.Stderr, "failing: error rate %s%% exceeds --fail-threshold %s%%\n",
+			fmtNum(stats.errRate), fmtNum(failPct))
+		os.Exit(1)
 	}
 }
 
@@ -564,6 +644,7 @@ func worker(
 	resultsMu *sync.Mutex,
 	wg *sync.WaitGroup,
 	sent *atomic.Int64,
+	errsLive *atomic.Int64,
 ) {
 	defer wg.Done()
 	for {
@@ -589,6 +670,7 @@ func worker(
 		sent.Add(1)
 
 		if err != nil {
+			errsLive.Add(1)
 			resultsMu.Lock()
 			*results = append(*results, result{latency: lat, err: err})
 			resultsMu.Unlock()
@@ -617,21 +699,20 @@ func worker(
 // ---------- Reporting ----------
 
 func printBanner(method, url string, concurrency, total int, duration time.Duration, rps int, ramp, think time.Duration, profile string) {
-	width := 56
-	line := strings.Repeat("─", width)
-	fmt.Println()
-	fmt.Printf("%s %s %s\n", col(c.cyan, "┌"+line+"┐"), "", "")
+	line := strings.Repeat("─", boxWidth-2)
 	title := "SURGE"
 	if profile != "" {
-		title = fmt.Sprintf("SURGE · %s", col(c.bold, strings.ToUpper(profile)))
+		title = fmt.Sprintf("SURGE · %s", strings.ToUpper(profile))
 	}
-	fmt.Printf("%s %-"+fmt.Sprint(width-2)+"s %s\n",
-		col(c.cyan, "│"), col(c.bold, title), col(c.cyan, "│"))
-	fmt.Printf("%s %s\n", col(c.cyan, "└"+line+"┘"), "")
+	// Pad the plain text before coloring, so ANSI escapes don't skew alignment.
+	fmt.Println()
+	fmt.Printf("%s\n", col(c.cyan, "╭"+line+"╮"))
+	fmt.Printf("%s%s%s\n", col(c.cyan, "│"), col(c.bold, padRight(" "+title, boxWidth-2)), col(c.cyan, "│"))
+	fmt.Printf("%s\n", col(c.cyan, "╰"+line+"╯"))
 
 	rows := [][2]string{
 		{"Target", fmt.Sprintf("%s %s", col(c.bold, method), col(c.cyan, url))},
-		{"Concurrency", fmt.Sprintf("%d users", concurrency)},
+		{"Concurrency", plural(concurrency, "user")},
 		{"Total requests", ternary(total > 0, fmt.Sprintf("%d", total), "unlimited")},
 		{"Duration", ternary(total > 0, "until total reached", duration.String())},
 		{"Rate limit", ternary(rps > 0, fmt.Sprintf("%d req/s", rps), "unlimited")},
@@ -646,19 +727,19 @@ func printBanner(method, url string, concurrency, total int, duration time.Durat
 
 // stats holds all computed metrics, shared between text and JSON output.
 type stats struct {
-	elapsed      time.Duration
-	sent         int64
-	totalReq     int
-	ok           int
-	errs         int
-	errRate      float64
-	throughput   float64
-	concurrency  int
-	latencies    []float64 // sorted, in ms
+	elapsed                                      time.Duration
+	sent                                         int64
+	totalReq                                     int
+	ok                                           int
+	errs                                         int
+	errRate                                      float64
+	throughput                                   float64
+	concurrency                                  int
+	latencies                                    []float64 // sorted, in ms
 	p25, p50, p75, p90, p95, p99, maxLat, avgLat float64
-	statusCounts map[int]int
-	errCats      map[string]int
-	errSamples   map[string]string
+	statusCounts                                 map[int]int
+	errCats                                      map[string]int
+	errSamples                                   map[string]string
 }
 
 func computeStats(results []result, elapsed time.Duration, sent int64, concurrency int) stats {
@@ -707,29 +788,44 @@ func computeStats(results []result, elapsed time.Duration, sent int64, concurren
 }
 
 func report(s stats) {
+	verdict := computeVerdict(s)
+
 	// ---- Summary block ----
 	fmt.Println(col(c.bold, "  SUMMARY"))
-	fmt.Printf("  %s\n", strings.Repeat("─", 52))
+	fmt.Printf("  %s\n", strings.Repeat("─", boxWidth))
 	printStat("Elapsed", s.elapsed.Round(time.Millisecond).String())
-	printStat("Requests sent", fmt.Sprintf("%d", s.sent))
+	printStat("Requests sent", fmtInt(s.sent))
 	printStat("Completed", fmt.Sprintf("%d", s.totalReq))
-	printStat("Successful", fmt.Sprintf("%s  %s",
-		fmt.Sprintf("%d", s.ok),
-		col(c.dim, fmt.Sprintf("(%.2f%%)", pct(s.ok, s.totalReq)))))
+	printStat("Successful", fmt.Sprintf("%d  %s",
+		s.ok,
+		col(c.dim, "("+fmtPct(s.ok, s.totalReq)+")")))
 	errStr := fmt.Sprintf("%d", s.errs)
 	if s.errs > 0 {
 		errStr = col(c.red, errStr)
 	}
 	printStat("Errors", fmt.Sprintf("%s  %s",
 		errStr,
-		col(c.dim, fmt.Sprintf("(%.2f%%)", s.errRate))))
+		col(c.dim, "("+fmtPct(s.errs, s.totalReq)+")")))
 	printStat("Throughput", fmt.Sprintf("%.1f req/s", s.throughput))
 	fmt.Println()
+	stagger()
+
+	// ---- Verdict badge: the headline result, right after the summary ----
+	printVerdictBadge(verdict)
+	fmt.Println()
+
+	// Small samples can't support strong claims — say so up front.
+	if s.totalReq > 0 && s.totalReq < 30 {
+		fmt.Printf("  %s %s\n", col(c.yellow, "⚠"),
+			col(c.dim, fmt.Sprintf("Low sample (%d requests) — re-run to confirm before drawing conclusions.", s.totalReq)))
+		fmt.Println()
+	}
+	stagger()
 
 	// ---- Latency block ----
-	if len(s.latencies) > 0 {
+	if s.ok > 0 {
 		fmt.Println(col(c.bold, "  LATENCY"))
-		fmt.Printf("  %s\n", strings.Repeat("─", 52))
+		fmt.Printf("  %s\n", strings.Repeat("─", boxWidth))
 		pcts := []struct {
 			label string
 			p     float64
@@ -750,15 +846,17 @@ func report(s stats) {
 		}
 		printStat("avg", fmt.Sprintf("%.2f ms", s.avgLat))
 		fmt.Println()
+		stagger()
 
 		// ---- Histogram ----
 		printHistogram(s.latencies)
+		stagger()
 	}
 
 	// ---- Status codes ----
 	if len(s.statusCounts) > 0 {
 		fmt.Println(col(c.bold, "  STATUS CODES"))
-		fmt.Printf("  %s\n", strings.Repeat("─", 52))
+		fmt.Printf("  %s\n", strings.Repeat("─", boxWidth))
 		codes := make([]int, 0, len(s.statusCounts))
 		for code := range s.statusCounts {
 			codes = append(codes, code)
@@ -767,19 +865,20 @@ func report(s stats) {
 		for _, code := range codes {
 			count := s.statusCounts[code]
 			color := statusColor(code)
-			fmt.Printf("  %s  %-8s %s  %s\n",
+			fmt.Printf("  %s %s  %s  %s\n",
 				col(color, fmt.Sprintf("%d", code)),
-				"",
-				padRight(fmt.Sprintf("%d", count), 8),
-				col(c.dim, fmt.Sprintf("%.2f%%", pct(count, s.totalReq))))
+				col(color, statusCodeSymbol(code)),
+				padLeft(fmt.Sprintf("%d", count), 6),
+				col(c.dim, fmtPct(count, s.totalReq)))
 		}
 		fmt.Println()
+		stagger()
 	}
 
 	// ---- Error breakdown ----
 	if s.errs > 0 {
 		fmt.Println(col(c.bold, "  ERRORS"))
-		fmt.Printf("  %s\n", strings.Repeat("─", 52))
+		fmt.Printf("  %s\n", strings.Repeat("─", boxWidth))
 		cats := make([]string, 0, len(s.errCats))
 		for cat := range s.errCats {
 			cats = append(cats, cat)
@@ -791,49 +890,50 @@ func report(s stats) {
 				col(c.red, "✗"),
 				col(c.bold, cat),
 				padLeft(fmt.Sprintf("%d", count), 6),
-				col(c.dim, fmt.Sprintf("(%.2f%% of errors)", pct(count, s.errs))))
+				col(c.dim, "("+fmtNum(pct(count, s.errs))+"% of errors)"))
 			if sample, has := s.errSamples[cat]; has {
-				fmt.Printf("    %s %s\n", col(c.gray, "└"), col(c.dim, truncate(sample, 80)))
+				fmt.Printf("    %s %s\n", col(c.gray, "└"), col(c.dim, truncateMiddle(sample, 80)))
 			}
 		}
 		fmt.Println()
+		stagger()
 	}
 
 	// ---- Analysis & recommendations ----
-	printAnalysis(s)
+	printAnalysis(s, verdict)
 }
 
 // ---------- JSON output ----------
 
 type jsonOutput struct {
-	Summary     jsonSummary     `json:"summary"`
-	Latency     jsonLatency     `json:"latency"`
+	Summary      jsonSummary    `json:"summary"`
+	Latency      jsonLatency    `json:"latency"`
 	Distribution []jsonBin      `json:"distribution"`
-	StatusCodes map[string]int  `json:"status_codes"`
-	Errors      jsonErrors      `json:"errors"`
+	StatusCodes  map[string]int `json:"status_codes"`
+	Errors       jsonErrors     `json:"errors"`
 }
 
 type jsonSummary struct {
-	Elapsed    string  `json:"elapsed"`
-	Sent       int64   `json:"sent"`
-	Completed  int     `json:"completed"`
-	Successful int     `json:"successful"`
-	Errors     int     `json:"errors"`
-	ErrorRate  float64 `json:"error_rate_pct"`
-	Throughput float64 `json:"throughput_req_s"`
-	Concurrency int    `json:"concurrency"`
+	Elapsed     string  `json:"elapsed"`
+	Sent        int64   `json:"sent"`
+	Completed   int     `json:"completed"`
+	Successful  int     `json:"successful"`
+	Errors      int     `json:"errors"`
+	ErrorRate   float64 `json:"error_rate_pct"`
+	Throughput  float64 `json:"throughput_req_s"`
+	Concurrency int     `json:"concurrency"`
 }
 
 type jsonLatency struct {
-	Min  float64 `json:"min_ms"`
-	P25  float64 `json:"p25_ms"`
-	P50  float64 `json:"p50_ms"`
-	P75  float64 `json:"p75_ms"`
-	P90  float64 `json:"p90_ms"`
-	P95  float64 `json:"p95_ms"`
-	P99  float64 `json:"p99_ms"`
-	Max  float64 `json:"max_ms"`
-	Avg  float64 `json:"avg_ms"`
+	Min float64 `json:"min_ms"`
+	P25 float64 `json:"p25_ms"`
+	P50 float64 `json:"p50_ms"`
+	P75 float64 `json:"p75_ms"`
+	P90 float64 `json:"p90_ms"`
+	P95 float64 `json:"p95_ms"`
+	P99 float64 `json:"p99_ms"`
+	Max float64 `json:"max_ms"`
+	Avg float64 `json:"avg_ms"`
 }
 
 type jsonBin struct {
@@ -843,9 +943,9 @@ type jsonBin struct {
 }
 
 type jsonErrors struct {
-	Total     int               `json:"total"`
-	Rate      float64           `json:"rate_pct"`
-	Categories map[string]int   `json:"categories"`
+	Total      int               `json:"total"`
+	Rate       float64           `json:"rate_pct"`
+	Categories map[string]int    `json:"categories"`
 	Samples    map[string]string `json:"samples"`
 }
 
@@ -877,21 +977,27 @@ func printJSON(s stats) {
 		statusStr[fmt.Sprintf("%d", code)] = count
 	}
 
-	out := jsonOutput{
-		Summary: jsonSummary{
-			Elapsed:    s.elapsed.Round(time.Millisecond).String(),
-			Sent:       s.sent,
-			Completed:  s.totalReq,
-			Successful: s.ok,
-			Errors:     s.errs,
-			ErrorRate:  s.errRate,
-			Throughput: s.throughput,
-			Concurrency: s.concurrency,
-		},
-		Latency: jsonLatency{
+	// With zero successful requests there is no latency data to report.
+	lat := jsonLatency{}
+	if len(s.latencies) > 0 {
+		lat = jsonLatency{
 			Min: s.latencies[0], P25: s.p25, P50: s.p50, P75: s.p75,
 			P90: s.p90, P95: s.p95, P99: s.p99, Max: s.maxLat, Avg: s.avgLat,
+		}
+	}
+
+	out := jsonOutput{
+		Summary: jsonSummary{
+			Elapsed:     s.elapsed.Round(time.Millisecond).String(),
+			Sent:        s.sent,
+			Completed:   s.totalReq,
+			Successful:  s.ok,
+			Errors:      s.errs,
+			ErrorRate:   s.errRate,
+			Throughput:  s.throughput,
+			Concurrency: s.concurrency,
 		},
+		Latency:      lat,
 		Distribution: dist,
 		StatusCodes:  statusStr,
 		Errors: jsonErrors{
@@ -907,65 +1013,54 @@ func printJSON(s stats) {
 	enc.Encode(out)
 }
 
-func printAnalysis(a stats) {
+func printAnalysis(a stats, verdict verdictInfo) {
 	fmt.Println(col(c.bold, "  ANALYSIS"))
-	fmt.Printf("  %s\n", strings.Repeat("─", 52))
+	fmt.Printf("  %s\n", strings.Repeat("─", boxWidth))
 
-	// Overall health verdict.
-	verdict := "Excellent"
-	vColor := c.green
-	switch {
-	case a.errRate > 5 || a.p99 > 1000:
-		verdict = "Poor"
-		vColor = c.red
-	case a.errRate > 1 || a.p99 > 500:
-		verdict = "Fair"
-		vColor = c.yellow
-	case a.errRate > 0.1 || a.p99 > 200:
-		verdict = "Good"
-		vColor = c.cyan
-	}
-	fmt.Printf("  %-18s %s\n", col(c.dim, "Verdict"), col(vColor, verdict))
-	fmt.Println()
-
-	// Latency interpretation.
-	fmt.Printf("  %s\n", col(c.bold, "Latency"))
-	addInsight("p50", a.p50, "ms",
-		"Half your requests complete under this — most users experience this speed.",
-		[]insightRule{
-			{le: 100, msg: "Feels instant. Typical of a CDN-fronted or well-cached static site.", good: true},
-			{le: 300, msg: "Acceptable for most web pages, but noticeable on slow connections.", good: true},
-			{le: 1000, msg: "Users will perceive a delay. Investigate backend or cold-start latency.", good: false},
-			{msg: "Over 1s p50 — most users will perceive the site as slow.", good: false},
-		})
-	addInsight("p90", a.p90, "ms",
-		"10% of users experience this or worse — the start of the tail.",
-		[]insightRule{
-			{le: 200, msg: "Tail is well-controlled.", good: true},
-			{le: 500, msg: "Some users see noticeable slowdowns under load.", good: false},
-			{msg: "Tail latency is high — check for slow DB queries, cache misses, or origin overload.", good: false},
-		})
-	addInsight("p99", a.p99, "ms",
-		"1% of users hit this — the long tail. SREs watch this closely.",
-		[]insightRule{
-			{le: 300, msg: "Excellent tail control.", good: true},
-			{le: 1000, msg: "Acceptable but borderline — 1 in 100 requests is slow.", good: false},
-			{msg: "p99 over 1s means 1% of users see a multi-second load. Investigate origin capacity.", good: false},
-		})
 	tailRatio := 0.0
-	if a.p50 > 0 {
-		tailRatio = a.p99 / a.p50
+
+	// Latency interpretation. With no successful requests there is nothing
+	// to interpret — say so instead of analyzing zeros.
+	if a.ok == 0 {
+		fmt.Printf("  %s %s\n", col(c.red, "✗"), "No successful requests — latency data unavailable.")
+	} else {
+		fmt.Printf("  %s\n", col(c.bold, "Latency"))
+		addInsight("p50", a.p50, "ms",
+			"Half your requests complete under this — most users experience this speed.",
+			[]insightRule{
+				{le: 100, msg: "Feels instant. Typical of a CDN-fronted or well-cached static site.", good: true},
+				{le: 300, msg: "Acceptable for most web pages, but noticeable on slow connections.", good: true},
+				{le: 1000, msg: "Users will perceive a delay. Investigate backend or cold-start latency.", good: false},
+				{msg: "Over 1s p50 — most users will perceive the site as slow.", good: false},
+			})
+		addInsight("p90", a.p90, "ms",
+			"10% of users experience this or worse — the start of the tail.",
+			[]insightRule{
+				{le: 200, msg: "Tail is well-controlled.", good: true},
+				{le: 500, msg: "Some users see noticeable slowdowns under load.", good: false},
+				{msg: "Tail latency is high — check for slow DB queries, cache misses, or origin overload.", good: false},
+			})
+		addInsight("p99", a.p99, "ms",
+			"1% of users hit this — the long tail. SREs watch this closely.",
+			[]insightRule{
+				{le: 300, msg: "Excellent tail control.", good: true},
+				{le: 1000, msg: "Acceptable but borderline — 1 in 100 requests is slow.", good: false},
+				{msg: "p99 over 1s means 1% of users see a multi-second load. Investigate origin capacity.", good: false},
+			})
+		if a.p50 > 0 {
+			tailRatio = a.p99 / a.p50
+		}
+		tailMsg := ""
+		switch {
+		case tailRatio < 3:
+			tailMsg = "Tail is proportional — latency is consistent across requests."
+		case tailRatio < 10:
+			tailMsg = "Moderate tail — some requests are much slower, likely cache misses or GC pauses."
+		default:
+			tailMsg = "High tail variance — a small number of requests are dramatically slower. Look for cold starts, retries, or origin spikes."
+		}
+		fmt.Printf("  %s %s\n", col(c.gray, "└"), col(c.dim, tailMsg))
 	}
-	tailMsg := ""
-	switch {
-	case tailRatio < 3:
-		tailMsg = "Tail is proportional — latency is consistent across requests."
-	case tailRatio < 10:
-		tailMsg = "Moderate tail — some requests are much slower, likely cache misses or GC pauses."
-	default:
-		tailMsg = "High tail variance — a small number of requests are dramatically slower. Look for cold starts, retries, or origin spikes."
-	}
-	fmt.Printf("  %s %s\n", col(c.gray, "└"), col(c.dim, tailMsg))
 	fmt.Println()
 
 	// Error interpretation.
@@ -975,30 +1070,30 @@ func printAnalysis(a stats) {
 		fmt.Printf("  %s %s\n", col(c.green, "✓"), "No errors — every request succeeded.")
 	case a.errRate < 0.5:
 		fmt.Printf("  %s %s\n", col(c.green, "✓"),
-			fmt.Sprintf("Error rate %.2f%% is negligible — likely transient network blips under high concurrency.", a.errRate))
+			fmt.Sprintf("Error rate %s%% is negligible — likely transient network blips under high concurrency.", fmtNum(a.errRate)))
 	case a.errRate < 1:
 		fmt.Printf("  %s %s\n", col(c.yellow, "⚠"),
-			fmt.Sprintf("Error rate %.2f%% is low but worth watching. Check if it scales with concurrency.", a.errRate))
+			fmt.Sprintf("Error rate %s%% is low but worth watching. Check if it scales with concurrency.", fmtNum(a.errRate)))
 	case a.errRate < 5:
 		fmt.Printf("  %s %s\n", col(c.yellow, "⚠"),
-			fmt.Sprintf("Error rate %.2f%% is meaningful — some users are failing. Investigate before raising load.", a.errRate))
+			fmt.Sprintf("Error rate %s%% is meaningful — some users are failing. Investigate before raising load.", fmtNum(a.errRate)))
 	default:
 		fmt.Printf("  %s %s\n", col(c.red, "✗"),
-			fmt.Sprintf("Error rate %.2f%% is high — the site is failing under this load. Reduce concurrency or fix the origin.", a.errRate))
+			fmt.Sprintf("Error rate %s%% is high — the site is failing under this load. Reduce concurrency or fix the origin.", fmtNum(a.errRate)))
 	}
 	// Error category hints.
 	if len(a.errCats) > 0 {
 		hints := map[string]string{
-			"Timeout":             "Origin is too slow to respond within the deadline. Increase -timeout or optimize the backend.",
-			"Connection refused":  "Origin is rejecting connections — it may be down or at its connection limit.",
-			"Connection reset":    "Connection dropped mid-request. Often a load balancer or origin restarting under pressure.",
-			"Unexpected EOF":      "Connection closed before a full response. Origin or proxy is dropping requests.",
-			"DNS resolution":      "DNS lookups are failing. Check your DNS provider and TTLs.",
-			"TLS/certificate":     "TLS handshake failed. Check cert validity, SNI, and intermediate certs.",
-			"Broken pipe":         "Client-side write failed after origin closed. Usually correlates with origin overload.",
-			"Resource exhaustion": "You're hitting OS limits (file descriptors/sockets). Raise ulimit -n or reduce concurrency.",
+			"Timeout":               "Origin is too slow to respond within the deadline. Increase -timeout or optimize the backend.",
+			"Connection refused":    "Origin is rejecting connections — it may be down or at its connection limit.",
+			"Connection reset":      "Connection dropped mid-request. Often a load balancer or origin restarting under pressure.",
+			"Unexpected EOF":        "Connection closed before a full response. Origin or proxy is dropping requests.",
+			"DNS resolution":        "DNS lookups are failing. Check your DNS provider and TTLs.",
+			"TLS/certificate":       "TLS handshake failed. Check cert validity, SNI, and intermediate certs.",
+			"Broken pipe":           "Client-side write failed after origin closed. Usually correlates with origin overload.",
+			"Resource exhaustion":   "You're hitting OS limits (file descriptors/sockets). Raise ulimit -n or reduce concurrency.",
 			"Canceled (test ended)": "Request was in-flight when the test duration expired — not a real error.",
-			"Other":               "Unclassified error. Re-run with verbose logging to inspect.",
+			"Other":                 "Unclassified error. Re-run with verbose logging to inspect.",
 		}
 		for cat, count := range a.errCats {
 			if hint, ok := hints[cat]; ok {
@@ -1051,50 +1146,55 @@ func printAnalysis(a stats) {
 	// Recommendations.
 	fmt.Printf("  %s\n", col(c.bold, "Recommendations"))
 	var recs []string
-	// Tail vs p50.
-	if tailRatio > 5 && a.p99 > 200 {
-		recs = append(recs, "Tail latency is high relative to p50 — investigate cache misses, cold starts, or DB query timeouts at the origin.")
-	}
-	// p99 absolute.
-	if a.p99 > 1000 {
-		recs = append(recs, "p99 exceeds 1s — 1% of users see a multi-second load. Profile the slowest origin requests.")
-	}
-	// Error rate.
-	if a.errRate > 0 && a.errRate < 0.5 {
-		recs = append(recs, fmt.Sprintf("Error rate is %.2f%% — small enough to be transient, but re-run with higher -c to see if it grows.", a.errRate))
-	}
-	if a.errRate >= 0.5 && a.errRate < 5 {
-		recs = append(recs, fmt.Sprintf("Error rate is %.2f%% — check the error breakdown above and address the dominant category before increasing load.", a.errRate))
-	}
-	if a.errRate >= 5 {
-		recs = append(recs, fmt.Sprintf("Error rate is %.2f%% — the site cannot sustain this load. Reduce -c or fix the origin first.", a.errRate))
-	}
-	// Capacity hint.
-	if a.errRate < 1 && a.p99 < 500 {
-		recs = append(recs, fmt.Sprintf("Site handled %d concurrent users at %.0f req/s with no issues — try doubling -c to find the ceiling.", a.concurrency, a.throughput))
-	}
-	// 5xx.
-	for code := range a.statusCounts {
-		if code >= 500 {
-			recs = append(recs, fmt.Sprintf("Got HTTP %d responses — the origin is erroring under load. Check origin logs and resource limits (CPU/memory/DB connections).", code))
-			break
+	if a.ok == 0 {
+		recs = append(recs,
+			fmt.Sprintf("All %d requests failed — the target is unreachable or refusing connections. Fix availability before tuning load (see the error categories above).", a.errs))
+	} else {
+		// Tail vs p50.
+		if tailRatio > 5 && a.p99 > 200 {
+			recs = append(recs, "Tail latency is high relative to p50 — investigate cache misses, cold starts, or DB query timeouts at the origin.")
 		}
-	}
-	// 429.
-	if _, has := a.statusCounts[429]; has {
-		recs = append(recs, "Received 429 rate-limiting — the CDN or origin is throttling. Use -rps to stay under the limit.")
-	}
-	// Resource exhaustion.
-	if a.errCats["Resource exhaustion"] > 0 {
-		recs = append(recs, "Hit OS resource limits (sockets/file descriptors). Run `ulimit -n` and increase it, or reduce -c.")
-	}
-	// Timeout dominant.
-	if a.errCats["Timeout"] > 0 && a.errCats["Timeout"] == a.errs {
-		recs = append(recs, "All errors are timeouts — the origin can't keep up. Try a longer -timeout or lower -c to see if it's a capacity wall.")
-	}
-	// Default positive note.
-	if len(recs) == 0 {
-		recs = append(recs, "No issues detected at this load level. To find the breaking point, increase -c (e.g. 100, 200, 500) and re-run.")
+		// p99 absolute.
+		if a.p99 > 1000 {
+			recs = append(recs, "p99 exceeds 1s — 1% of users see a multi-second load. Profile the slowest origin requests.")
+		}
+		// Error rate.
+		if a.errRate > 0 && a.errRate < 0.5 {
+			recs = append(recs, fmt.Sprintf("Error rate is %s%% — small enough to be transient, but re-run with higher -c to see if it grows.", fmtNum(a.errRate)))
+		}
+		if a.errRate >= 0.5 && a.errRate < 5 {
+			recs = append(recs, fmt.Sprintf("Error rate is %s%% — check the error breakdown above and address the dominant category before increasing load.", fmtNum(a.errRate)))
+		}
+		if a.errRate >= 5 {
+			recs = append(recs, fmt.Sprintf("Error rate is %s%% — the site cannot sustain this load. Reduce -c or fix the origin first.", fmtNum(a.errRate)))
+		}
+		// Capacity hint.
+		if a.errRate < 1 && a.p99 < 500 {
+			recs = append(recs, fmt.Sprintf("Site handled %d concurrent users at %.0f req/s with no issues — try doubling -c to find the ceiling.", a.concurrency, a.throughput))
+		}
+		// 5xx.
+		for code := range a.statusCounts {
+			if code >= 500 {
+				recs = append(recs, fmt.Sprintf("Got HTTP %d responses — the origin is erroring under load. Check origin logs and resource limits (CPU/memory/DB connections).", code))
+				break
+			}
+		}
+		// 429.
+		if _, has := a.statusCounts[429]; has {
+			recs = append(recs, "Received 429 rate-limiting — the CDN or origin is throttling. Use -rps to stay under the limit.")
+		}
+		// Resource exhaustion.
+		if a.errCats["Resource exhaustion"] > 0 {
+			recs = append(recs, "Hit OS resource limits (sockets/file descriptors). Run `ulimit -n` and increase it, or reduce -c.")
+		}
+		// Timeout dominant.
+		if a.errCats["Timeout"] > 0 && a.errCats["Timeout"] == a.errs {
+			recs = append(recs, "All errors are timeouts — the origin can't keep up. Try a longer -timeout or lower -c to see if it's a capacity wall.")
+		}
+		// Default positive note.
+		if len(recs) == 0 {
+			recs = append(recs, "No issues detected at this load level. To find the breaking point, increase -c (e.g. 100, 200, 500) and re-run.")
+		}
 	}
 	for _, r := range recs {
 		fmt.Printf("  %s %s\n", col(c.cyan, "→"), r)
@@ -1116,22 +1216,61 @@ func addInsight(label string, value float64, unit string, context string, rules 
 			if !r.good {
 				icon = col(c.yellow, "⚠")
 			}
-			fmt.Printf("  %s %s: %s\n", icon, col(c.bold, fmt.Sprintf("%s = %.2f %s", label, value, unit)), r.msg)
+			fmt.Printf("  %s %s: %s\n", icon, col(c.bold, fmt.Sprintf("%s = %s %s", label, fmtNum(value), unit)), r.msg)
 			matched = true
 			break
 		}
 	}
 	if !matched {
-		fmt.Printf("  %s %s: %s\n", col(c.red, "✗"), col(c.bold, fmt.Sprintf("%s = %.2f %s", label, value, unit)), rules[len(rules)-1].msg)
+		fmt.Printf("  %s %s: %s\n", col(c.red, "✗"), col(c.bold, fmt.Sprintf("%s = %s %s", label, fmtNum(value), unit)), rules[len(rules)-1].msg)
 	}
 	fmt.Printf("    %s %s\n", col(c.gray, "└"), col(c.dim, context))
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
+// truncateMiddle keeps the head and tail of s within n runes, joined by "…".
+// Network errors carry their useful detail (hostnames, addresses) at the end,
+// so the middle is cut instead of the tail.
+func truncateMiddle(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	keep := n - 1
+	head := keep / 2
+	return string(r[:head]) + "…" + string(r[len(r)-(keep-head):])
+}
+
+// fmtNum formats v with up to two decimals, trimming trailing zeros:
+// 144.00 → "144", 144.50 → "144.5". Use %.2f directly where decimals
+// always matter (e.g. avg latency).
+func fmtNum(v float64) string {
+	s := strconv.FormatFloat(v, 'f', 2, 64)
+	s = strings.TrimRight(s, "0")
+	return strings.TrimSuffix(s, ".")
+}
+
+// fmtPct formats a share of whole as a trimmed percentage: "100%", "8.33%".
+func fmtPct(part, whole int) string {
+	return fmtNum(pct(part, whole)) + "%"
+}
+
+// fmtInt groups digits in thousands: 1234567 → "1,234,567".
+func fmtInt(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	groups := []string{}
+	for len(s) > 3 {
+		groups = append([]string{s[len(s)-3:]}, groups...)
+		s = s[:len(s)-3]
+	}
+	return strings.Join(append([]string{s}, groups...), ",")
+}
+
+// plural returns "1 user" / "50 users".
+func plural(n int, thing string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, thing)
+	}
+	return fmt.Sprintf("%d %ss", n, thing)
 }
 
 func printStat(label, value string) {
@@ -1154,7 +1293,7 @@ func printLatencyRow(label string, value, maxLat float64) {
 		col(c.dim, "•"),
 		col(c.bold, label),
 		col(color, bar),
-		col(color, fmt.Sprintf("%7.2f ms", value)))
+		col(color, padLeft(fmtNum(value), 7)+" ms"))
 }
 
 func printHistogram(latencies []float64) {
@@ -1194,16 +1333,123 @@ func printHistogram(latencies []float64) {
 			frac = float64(count) / float64(maxCount)
 		}
 		barLen := int(frac * float64(barWidth))
-		bar := strings.Repeat("█", barLen) + strings.Repeat("░", barWidth-barLen)
-		pctStr := col(c.dim, fmt.Sprintf("%.1f%%", pct(count, len(latencies))))
-		fmt.Printf("  %s %-12s %s  %s  %s\n",
-			col(c.dim, "•"),
-			b.label,
-			col(c.cyan, bar),
-			padLeft(fmt.Sprintf("%d", count), 7),
-			pctStr)
+		// Empty buckets get a faint bar so they don't carry visual weight.
+		barColor := c.cyan
+		if count == 0 {
+			barColor = c.gray
+		}
+		countStr := padLeft(fmt.Sprintf("%d", count), 7)
+		pctStr := col(c.dim, fmtPct(count, len(latencies)))
+		row := func(bar int) string {
+			return fmt.Sprintf("  %s %-12s %s  %s  %s",
+				col(c.dim, "•"),
+				b.label,
+				col(barColor, strings.Repeat("█", bar)+strings.Repeat("░", barWidth-bar)),
+				countStr,
+				pctStr)
+		}
+		// On a TTY, grow the bar in so the eye follows the distribution.
+		if animate && barLen > 0 {
+			const steps = 5
+			for st := 1; st <= steps; st++ {
+				fmt.Printf("\r%s", row(barLen*st/steps))
+				time.Sleep(8 * time.Millisecond)
+			}
+		} else {
+			fmt.Print(row(barLen))
+		}
+		fmt.Println()
 	}
 	fmt.Println()
+}
+
+// ---------- Verdict & animation ----------
+
+type verdictInfo struct {
+	word  string
+	color string
+}
+
+func computeVerdict(a stats) verdictInfo {
+	switch {
+	case a.errRate > 5 || a.p99 > 1000:
+		return verdictInfo{"Poor", c.red}
+	case a.errRate > 1 || a.p99 > 500:
+		return verdictInfo{"Fair", c.yellow}
+	case a.errRate > 0.1 || a.p99 > 200:
+		return verdictInfo{"Good", c.cyan}
+	default:
+		return verdictInfo{"Excellent", c.green}
+	}
+}
+
+// printVerdictBadge stamps the headline result in a colored box. On a TTY it
+// appears after a short beat, which gives it the weight of a finale.
+func printVerdictBadge(v verdictInfo) {
+	const inner = 26
+	label := " VERDICT · "
+	body := col(c.dim, label) + col(c.bold, v.word) + strings.Repeat(" ", inner-len(label)-len(v.word))
+	if animate {
+		time.Sleep(300 * time.Millisecond)
+	}
+	border := col(v.color, "│")
+	fmt.Printf("  %s\n", col(v.color, "╭"+strings.Repeat("─", inner)+"╮"))
+	if animate {
+		time.Sleep(60 * time.Millisecond)
+	}
+	fmt.Printf("  %s%s%s\n", border, body, border)
+	if animate {
+		time.Sleep(60 * time.Millisecond)
+	}
+	fmt.Printf("  %s\n", col(v.color, "╰"+strings.Repeat("─", inner)+"╯"))
+}
+
+// stagger sleeps briefly between report sections on a TTY so the report
+// appears to arrive. No-op when piped.
+func stagger() {
+	if animate {
+		time.Sleep(45 * time.Millisecond)
+	}
+}
+
+// drawProgress renders the live status line on stderr and returns its
+// printable width so the next frame can pad over it (and erase it at the end).
+func drawProgress(frame int, start time.Time, total int, sent, errs int64, lastWidth int) int {
+	f := spinnerFrames[frame%len(spinnerFrames)]
+	var s string
+	if total > 0 {
+		done := sent
+		if done > int64(total) {
+			done = int64(total)
+		}
+		p := float64(done) / float64(total) * 100
+		s = fmt.Sprintf("%s %s %s/%d (%.0f%%) │ %s errors",
+			f, progressBar(done, int64(total), 20), fmtInt(done), total, p, fmtInt(errs))
+	} else {
+		elapsed := time.Since(start).Round(time.Second)
+		rate := 0.0
+		if sec := time.Since(start).Seconds(); sec > 0 {
+			rate = float64(sent) / sec
+		}
+		s = fmt.Sprintf("%s Running…  %s │ %s sent │ %.0f req/s │ %s errors",
+			f, elapsed, fmtInt(sent), rate, fmtInt(errs))
+	}
+	if len(s) < lastWidth {
+		s = padRight(s, lastWidth)
+	}
+	fmt.Fprintf(os.Stderr, "\r%s", col(c.dim, s))
+	return len(s)
+}
+
+func progressBar(done, total int64, width int) string {
+	filled := 0
+	if total > 0 {
+		filled = int(float64(done) / float64(total) * float64(width))
+	}
+	if filled > width {
+		filled = width
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
 }
 
 // ---------- Helpers ----------
@@ -1261,6 +1507,21 @@ func padRight(s string, n int) string {
 	return s + strings.Repeat(" ", n-len(s))
 }
 
+func statusCodeSymbol(code int) string {
+	switch {
+	case code >= 200 && code < 300:
+		return "✓"
+	case code >= 300 && code < 400:
+		return "→"
+	case code >= 400 && code < 500:
+		return "⚠"
+	case code >= 500:
+		return "✗"
+	default:
+		return "·"
+	}
+}
+
 func statusColor(code int) string {
 	switch {
 	case code >= 200 && code < 300:
@@ -1312,6 +1573,5 @@ func withLimit(parent context.Context, n int64) context.Context {
 	rem.Store(n)
 	return &limitCtx{Context: parent, remaining: rem}
 }
-
 
 func init() { log.SetFlags(0) }
