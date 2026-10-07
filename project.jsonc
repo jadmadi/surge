@@ -1,0 +1,106 @@
+{
+  "$schema": "https://jadmadi.net/schemas/project.schema.json",
+  // Timestamp of the last metadata revision (Format: YY-MM-DD-HH-MM, e.g. 26-10-07-07-20)
+  "lastEdit": "26-10-07-07-59",
+
+  // Unique identifier matching the project URL slug on jadmadi.net (e.g. /project/<id>/)
+  "id": "surge",
+
+  // Human-readable title
+  "title": "Surge",
+
+  // Single-sentence punchy tagline
+  "tagline": "Lightning-fast, concurrent HTTP load testing tool in Go with CI quality gates",
+
+  // Semantic version (SemVer, e.g. "0.18.0", or CalVer, e.g. "2026.9.0")
+  "version": "0.1.0",
+
+  // 2-3 sentence executive summary explaining what it does, why it exists, and zero-bullshit proof
+  "summary": "High-performance concurrent HTTP load testing CLI built in Go. Measures latency percentiles (p50, p90, p95, p99), ships real-user traffic presets (baseline, realistic, capacity, spike), provides automated health verdicts, and emits structured JSON for CI/CD gates.",
+
+  // Status on catalog: "featured" | "active" | "in-progress" | "upstream-merged" | "beta" | "archived"
+  "status": "active",
+
+  // Release or active year
+  "year": "2026",
+
+  // Technical stack breakdown
+  "tech_stack": {
+    "languages": [
+      "Go"
+    ],
+    "frameworks": [
+      "net/http"
+    ],
+    "architecture": "Goroutine worker pools, zero-allocation latency buckets, lock-free histogram metrics",
+    "license": "AGPL-3.0",
+    "license_type": "copyleft"
+  },
+
+  // One-line metrics/capabilities pill shown on cards and tables
+  "stats": "Sub-millisecond tail latency · 4 Presets · Automated CI Verdicts · AGPL-3.0",
+
+  // Highlight badges displayed on project cards
+  "badges": [
+    "Go CLI",
+    "HTTP Benchmarking",
+    "CI/CD Gate",
+    "Tail Latency",
+    "AGPL-3.0"
+  ],
+
+  // Primary 1-line installation snippet (shown in copyable terminal widget)
+  "install_command": "curl -fsSL https://raw.githubusercontent.com/jadmadi/surge/main/install | bash",
+
+  // Multi-platform install commands (optional)
+  "install_commands": {
+    "linux_macos": "curl -fsSL https://raw.githubusercontent.com/jadmadi/surge/main/install | bash"
+  },
+
+  // Authoritative external links
+  "links": {
+    "github": "https://github.com/jadmadi/surge",
+    "website": "https://jadmadi.net/project/surge",
+    "docs": "https://github.com/jadmadi/surge/blob/main/README.md",
+    "package": "https://pkg.go.dev/github.com/jadmadi/surge"
+  },
+
+  // Problem statement: What pain point does this solve?
+  "problem_statement": "Existing load testing tools are either bloated enterprise suites or bare-bones curl loops that lack actionable tail-latency percentiles, automated health verdicts, and easily scriptable CI pipeline assertions.",
+
+  // Solution: How does this solve it?
+  "solution": "A single static Go binary providing accurate percentile calculations, ramp-up schedules, think-time modeling, and structured JSON output for strict pipeline thresholds.",
+
+  // List of major capabilities and distinct features
+  "features": [
+    "Calculates min, p25, p50, p75, p90, p95, p99, and max latency percentiles with histogram distributions",
+    "Four built-in workload presets: baseline, realistic, capacity, and spike testing",
+    "Automated diagnostic health verdicts: Excellent, Good, Fair, Poor with actionable remediation guidance",
+    "CI/CD quality gates via --fail-threshold error budgeting and machine-readable JSON output (-o json)",
+    "Traffic shaping with concurrency ramp-up curves (--ramp-up) and user think-time simulation (--think-time)",
+    "Throughput throttling via aggregate requests per second rate limiting (-rps)",
+    "Detailed classification of network failure modes (DNS, TLS handshake, connection resets, timeouts)",
+    "Custom HTTP headers (-H) with @file support, request bodies (-body), and automatic HTTPS for bare domains",
+    "Single static Go binary (~2 MB) with zero runtime dependencies cross-compiled for Linux, macOS, and Windows"
+  ],
+
+  // Frequently Asked Questions (displayed on project subpage & Schema.org FAQPage)
+  "faq": [
+    {
+      "question": "How do I install Surge?",
+      "answer": "Run `curl -fsSL https://raw.githubusercontent.com/jadmadi/surge/main/install | bash` on Linux and macOS, or `go install github.com/jadmadi/surge@latest` if you have Go installed."
+    },
+    {
+      "question": "Can I use Surge as a quality gate in CI/CD pipelines?",
+      "answer": "Yes. Use `-o json` to assert metrics in pipeline scripts (e.g. with `jq`), or pass `--fail-threshold <pct>` to exit with status code 1 when the error rate exceeds your threshold."
+    },
+    {
+      "question": "How do presets work in Surge?",
+      "answer": "Presets provide battle-tested traffic models (`baseline`, `realistic`, `capacity`, `spike`). You can invoke them directly (e.g. `surge realistic https://example.com`) and override any specific flag like `-c` or `-d`."
+    },
+    {
+      "question": "How do I pass custom headers or authorization tokens?",
+      "answer": "Pass custom headers with `-H 'Authorization: Bearer <token>'` (repeatable), or read long tokens directly from disk using `-H @/path/to/token.txt`."
+    }
+  ]
+}
